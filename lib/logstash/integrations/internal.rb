@@ -5,8 +5,13 @@ module LogStash; module Integrations; module Internal
     @inputs = java.util.concurrent.ConcurrentHashMap.new
   end
 
-  def self.running_addresses
-    @inputs.keys.map {|a| a.running?}.to_a
+  def self.addresses_by_run_state
+    result = {:running => [], :not_running => {}}
+    @inputs.forEach do |address, input| 
+      key = input.running? ? :running : :not_running
+      result[key] << address
+    end
+    result
   end
 
   def self.send_to(address, events)
@@ -93,9 +98,9 @@ module LogStash; module Integrations; module Internal
       @send_to.each do |address|
         while !Internal.send_to(address, events)
           sleep 1
-          @logger.warn("Internal output to address waiting for listener to start",
-            :address => address,
-            :running_addresses => Internal.addresses)
+          @logger.info("Internal output to address waiting for listener to start",
+            :destination_address => address,
+            :registered_addresses => Internal.addresses_by_run_state)
         end
       end
     end
