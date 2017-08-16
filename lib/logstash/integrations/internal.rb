@@ -1,7 +1,12 @@
 module LogStash; module Integrations; module Internal
   include ::LogStash::Util::Loggable
+
   def self.start!
     @inputs = java.util.concurrent.ConcurrentHashMap.new
+  end
+
+  def self.running_addresses
+    @inputs.keys.map {|a| a.running?}.to_a
   end
 
   def self.send_to(address, events)
@@ -13,7 +18,9 @@ module LogStash; module Integrations; module Internal
     # You might think this would be solvable in a simpler way using CHM.compute {|address, input| input.internal_receive(events) }
     # but that would be problematic since `internal_receive` blocks indefinitely on pipeline backpressure
     # this is much more dependable
-    return input && input.internal_receive(events)
+    if input
+      return input.internal_receive(events)
+    end
   end
 
   # Return true if nothing was listening previously
@@ -33,13 +40,19 @@ module LogStash; module Integrations; module Internal
     config :address, :validate => :string, :required => true
 
     def register
-      # nothing to do, but this is required by the plugin API
-      @running = java.util.concurrent.atomic.AtomicBoolean.new(true)
+      @running = java.util.concurrent.atomic.AtomicBoolean.new(false)
+    end
+
+    def running?
+      @running.get()
     end
 
     def run(queue)
       @queue = queue
       Internal.listen(@address, self)
+
+      # Now that the listener is set up we can activate this
+      @running.set(true)
 
       while @running.get()
         sleep 0.5
@@ -70,18 +83,19 @@ module LogStash; module Integrations; module Internal
   class Output < ::LogStash::Outputs::Base
     config_name "internal"
 
-    config_name "internal"
-
     config :send_to, :validate => :string, :required => true, :list => true
 
     def register
+      # Noop, needed to conform to plugin API
     end
 
     def multi_receive(events)
       @send_to.each do |address|
         while !Internal.send_to(address, events)
           sleep 1
-          @logger.error("Internal output to address '#{address}' blocked, no inputs have this address!")
+          @logger.warn("Internal output to address waiting for listener to start",
+            :address => address,
+            :running_addresses => Internal.addresses)
         end
       end
     end
